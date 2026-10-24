@@ -66,3 +66,36 @@ test("0.2.1 ask_user_question keeps the requested wait and caps only -1", () => 
   assert.ok(!out.text.includes("const timeout = 1;"));
   assert.equal(applyReplacementsToText(out.text, patch(89)).changed, false);
 });
+
+// The responses path names its role variable `instructionRole`, not `role`.
+// Pinning the real host text keeps the #57 anchor from silently drifting to a
+// name no host version ever used — the failure mode is invisible because the
+// patch is `optional`, so a miss still reports as applied.
+const RESPONSES_INSTRUCTION_ROLE =
+	'    const instructionRole = model.reasoning && compat?.supportsDeveloperRole !== false ? "developer" : "system";';
+
+test("#57 responses anchor matches the real instructionRole line and gates on the gateway", () => {
+  const out = applyReplacementsToText(RESPONSES_INSTRUCTION_ROLE, patch(57));
+  assert.equal(out.changed, true);
+  assert.ok(out.text.includes("const instructionRole = model.reasoning"));
+  assert.ok(out.text.includes('includes("api.openai.com")'));
+  assert.ok(out.text.includes('includes("azure.com")'));
+  assert.ok(out.text.includes("// [dsh-purge] developer role allowlist: openai/azure"));
+  // The rewrite must keep the role variable name, or the host stops compiling.
+  assert.ok(out.text.includes('? "developer" : "system";'));
+  assert.equal(applyReplacementsToText(out.text, patch(57)).changed, false);
+});
+
+test("#57 responses anchor leaves the vendor-native decision intact", () => {
+  const apply = (baseUrl) =>
+    eval(
+      `((model, compat) => ${applyReplacementsToText(RESPONSES_INSTRUCTION_ROLE, patch(57)).text
+        .trim()
+        .replace(/^const instructionRole = /, "")
+        .replace(/;\s*(\/\/.*)?$/, "")})`,
+    )({ reasoning: true, baseUrl }, undefined);
+  assert.equal(apply("https://api.openai.com/v1"), "developer");
+  assert.equal(apply("https://foo.azure.com"), "developer");
+  assert.equal(apply("https://gateway.example.com/v1"), "system");
+  assert.equal(apply("https://relay.example.net/v1"), "system");
+});
