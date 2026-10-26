@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { preferences, savePreferences, updateStatus, createUpdateController } from "../lib/update-policy.js";
+import { preferences, savePreferences, updateStatus, updateEnv, createUpdateController } from "../lib/update-policy.js";
 import { rememberUpdate } from "../lib/update.js";
 
 function setup(extra = {}) {
@@ -19,7 +19,7 @@ function setup(extra = {}) {
 }
 test("preferences default to check-only and preserve legacy automatic-install intent without migration writes", () => {
   const f = setup(); try {
-    assert.deepEqual(preferences(f.home), { autoCheck: true, autoInstall: false, intervalHours: 6 });
+    assert.deepEqual(preferences(f.home), { autoCheck: true, autoInstall: false, intervalHours: 6, proxyUrl: "", githubToken: "" });
     assert.equal(preferences(f.home, { autoUpdateOnStart: true }).autoInstall, true);
     assert.deepEqual(fs.readdirSync(f.home), []);
     fs.writeFileSync(path.join(f.home, "cordis.patch.yml"), "CURRENT SETTINGS");
@@ -135,4 +135,104 @@ test("an uninstalled file: dependency is reported as skipped, not silently ignor
     else process.env.DSH_HOME = prev;
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+// ---- update channel env + preference validation -----------------------------
+const TOKEN = "ghp_" + "a".repeat(36);
+function tempHome() {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "purge-env-"));
+  return {
+    home,
+    prefs: path.join(home, "dsh-purge/update-preferences.json"),
+    channel: path.join(home, "dsh-purge/update-channel.json"),
+    done() { fs.rmSync(home, { recursive: true, force: true }); },
+  };
+}
+const readRaw = (f) => JSON.parse(fs.readFileSync(f.prefs, "utf8"));
+// 通道凭据单独落盘，密钥相关断言必须读这个文件。
+const readChannel = (f) => JSON.parse(fs.readFileSync(f.channel, "utf8"));
+
+test("updateEnv exposes only the channel proxy and token, never the host environment", () => {
+  const f = tempHome(); try {
+    assert.deepEqual(updateEnv(f.home), {}, "nothing configured means no overrides at all");
+    savePreferences(f.home, { proxyUrl: "socks5://127.0.0.1:1080" });
+    assert.deepEqual(updateEnv(f.home), { PURGE_HTTPS_PROXY: "socks5://127.0.0.1:1080" });
+    savePreferences(f.home, { githubToken: TOKEN });
+    assert.deepEqual(updateEnv(f.home), { PURGE_HTTPS_PROXY: "socks5://127.0.0.1:1080", GITHUB_TOKEN: TOKEN },
+      "proxy and token coexist");
+    assert.equal(Object.keys(updateEnv(f.home)).length, 2, "no unrelated variables leak into the update channel");
+    savePreferences(f.home, { proxyUrl: "" });
+    assert.deepEqual(updateEnv(f.home), { GITHUB_TOKEN: TOKEN }, "an emptied proxyUrl drops PURGE_HTTPS_PROXY");
+    savePreferences(f.home, { clearGithubToken: true });
+    assert.deepEqual(updateEnv(f.home), {}, "a cleared token drops GITHUB_TOKEN");
+    assert.equal(process.env.PURGE_HTTPS_PROXY, undefined, "the host process environment is untouched");
+  } finally { f.done(); }
+});
+
+test("updateEnv fails closed on a corrupt or invalid preferences file", () => {
+  const f = tempHome(); try {
+    fs.mkdirSync(path.dirname(f.prefs), { recursive: true });
+    fs.writeFileSync(f.prefs, "broken json");
+    assert.deepEqual(updateEnv(f.home), {}, "corrupt JSON degrades to defaults instead of throwing");
+    assert.throws(() => preferences(f.home), /无法读取更新设置\/状态/, "the strict reader still reports the damage");
+    fs.writeFileSync(f.prefs, JSON.stringify({ proxyUrl: "ftp://127.0.0.1:21" }));
+    assert.deepEqual(updateEnv(f.home), {}, "an invalid stored proxy yields no channel override");
+    fs.writeFileSync(f.prefs, JSON.stringify({ githubToken: "has space here and is long enough" }));
+    assert.deepEqual(updateEnv(f.home), {}, "an invalid stored token is never forwarded to requests");
+    fs.writeFileSync(f.prefs, JSON.stringify({ intervalHours: 999 }));
+    assert.deepEqual(updateEnv(f.home), {}, "any validation failure fails closed");
+  } finally { f.done(); }
+});
+
+test("savePreferences rejects unsupported proxies, missing hosts and malformed tokens", () => {
+  const f = tempHome(); try {
+    assert.throws(() => savePreferences(f.home, { proxyUrl: "ftp://127.0.0.1:21" }), /仅支持 http \/ https \/ socks5 协议/);
+    assert.throws(() => savePreferences(f.home, { proxyUrl: "socks5://" }), /缺少主机名/);
+    assert.throws(() => savePreferences(f.home, { proxyUrl: "127.0.0.1:7890" }), /地址无效/);
+    assert.throws(() => savePreferences(f.home, { proxyUrl: 7890 }), /必须为字符串/);
+    assert.throws(() => savePreferences(f.home, { githubToken: TOKEN.slice(0, 10) }), /密钥格式无效/);
+    assert.throws(() => savePreferences(f.home, { githubToken: TOKEN + " b" }), /密钥格式无效/);
+    assert.throws(() => savePreferences(f.home, { githubToken: "x".repeat(256) }), /密钥格式无效/);
+    assert.throws(() => savePreferences(f.home, { githubToken: null }), /必须为字符串/);
+    assert.equal(fs.existsSync(f.prefs), false, "a rejected patch writes nothing");
+    for (const proxyUrl of ["http://127.0.0.1:7890", "https://proxy.example:8443", "socks5://127.0.0.1:1080", "socks5h://user:pw@127.0.0.1:1080", "socks://127.0.0.1:1080"]) {
+      assert.equal(savePreferences(f.home, { proxyUrl }).proxyUrl, proxyUrl, `${proxyUrl} is accepted`);
+    }
+    assert.equal(savePreferences(f.home, { githubToken: TOKEN }).githubToken, TOKEN, "a 40 character token is accepted");
+  } finally { f.done(); }
+});
+
+test("an empty githubToken keeps the stored secret; clearGithubToken is the only way to drop it", () => {
+  const f = tempHome(); try {
+    savePreferences(f.home, { githubToken: TOKEN });
+    // The panel never echoes the secret back, so an empty field means "unchanged".
+    assert.equal(savePreferences(f.home, { githubToken: "" }).githubToken, TOKEN);
+    assert.equal(preferences(f.home).githubToken, TOKEN);
+    assert.equal(savePreferences(f.home, { autoCheck: false }).githubToken, TOKEN, "an omitted field also keeps the secret");
+    assert.equal(savePreferences(f.home, { githubToken: undefined }).githubToken, TOKEN);
+    assert.equal(readChannel(f).githubToken, TOKEN, "the untouched secret is still on disk");
+    assert.equal(preferences(f.home).autoCheck, false, "the unrelated field still took effect");
+
+    assert.equal(savePreferences(f.home, { clearGithubToken: true }).githubToken, "", "clearGithubToken wipes the secret");
+    assert.equal(preferences(f.home).githubToken, "");
+    assert.equal(readChannel(f).githubToken, "", "the wipe is persisted, not just returned");
+    assert.equal("clearGithubToken" in readChannel(f), false, "the control flag itself is never persisted");
+    assert.deepEqual(updateEnv(f.home), {}, "updateEnv stops sending the removed token");
+
+    assert.equal(savePreferences(f.home, { clearGithubToken: false }).githubToken, "");
+    assert.equal(savePreferences(f.home, { githubToken: TOKEN, clearGithubToken: true }).githubToken, "",
+      "clear wins when both are sent in one patch");
+    assert.deepEqual(updateEnv(f.home), {}, "the same patch cannot re-add the token it clears");
+    savePreferences(f.home, { githubToken: TOKEN });
+    assert.deepEqual(updateEnv(f.home), { GITHUB_TOKEN: TOKEN }, "a new token can be set again afterwards");
+    // A non-boolean clear flag is rejected outright instead of being silently
+    // ignored: otherwise the panel could show "cleared" while the token survives.
+    assert.throws(() => savePreferences(f.home, { githubToken: TOKEN, clearGithubToken: "yes" }), /布尔/,
+      "a non-boolean clearGithubToken is rejected");
+    assert.throws(() => savePreferences(f.home, { clearGithubToken: 1 }), /布尔/,
+      "a numeric clearGithubToken is rejected");
+    assert.equal(updateEnv(f.home).GITHUB_TOKEN, TOKEN, "a rejected patch leaves the stored token untouched");
+    assert.equal(savePreferences(f.home, { clearGithubToken: true }).githubToken, "");
+    assert.equal("clearGithubToken" in readChannel(f), false, "the control flag itself is never persisted");
+  } finally { f.done(); }
 });

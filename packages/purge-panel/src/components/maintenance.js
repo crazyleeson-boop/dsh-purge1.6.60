@@ -6,7 +6,19 @@ import {
   useRef,
 } from "../shared/react.js";
 import { apiJson } from "../api/client.js";
+import { useT } from "../shared/locale.js";
 import { Btn, HelpTip } from "./primitives.js";
+/**
+ * 词条未注册时 t() 会原样返回 key；这里兜一层中文，
+ * 免得面板上出现「updch.open」这种字样。
+ */
+function useText() {
+  const t = useT();
+  return (key, fallback) => {
+    const hit = t(key);
+    return hit && hit !== key ? hit : fallback;
+  };
+}
 /**
  * 状态页顶部的两块紧凑信息：破甲自检（默认收起）+ 破甲强化段开关。
  * 单独拆出来，是为了让「应用」按钮留在页面最上面，而自检不占一屏。
@@ -242,7 +254,8 @@ export function maintenanceNotice(op, result) {
   return result.note || "维护操作已完成";
 }
 
-export function UpdatePreferences({ value, status = {}, onSaved }) {
+export function UpdatePreferences({ value, status = {}, onSaved, onOpenChannel }) {
+  const tr = useText();
   const [saving, setSaving] = useState(false),
     [error, setError] = useState("");
   const locked = useRef(false);
@@ -302,6 +315,21 @@ export function UpdatePreferences({ value, status = {}, onSaved }) {
           .sort((a, b) => a - b)
           .map((v) => h("option", { key: v, value: v }, `每 ${v} 小时`)),
       ),
+      // 「更新通道」与上面两个控件同行并排，尺寸与 select 一致：
+      // 它配置的正是这条更新检查走的代理/密钥，不该漂到标题最右端。
+      onOpenChannel
+        ? h(
+            Btn,
+            {
+              tiny: true,
+              className: "dshpp-updch-open",
+              disabled: saving,
+              onClick: () => onOpenChannel(),
+              title: tr("updch.title", "更新通道：代理与 GitHub 密钥"),
+            },
+            tr("updch.open", "更新通道"),
+          )
+        : null,
     ),
     h(
       "div",
@@ -347,6 +375,178 @@ export function UpdatePreferences({ value, status = {}, onSaved }) {
   );
 }
 
+/**
+ * 更新通道：代理地址 + GitHub 密钥。
+ * GET /dsh-purge/community 返回的 update_preferences 里 githubToken 恒为空串，
+ * 只带 hasGithubToken 表示本机是否已配置，所以输入框永远从空白开始，不回填明文。
+ * 保存语义：value.proxyUrl 总是带上（空串=直连）；只有真填了密钥才带 githubToken，
+ * 留空表示保持原密钥；要清除则带 clearGithubToken:true。
+ * 面板里没有可靠的 react-dom portal，这里用固定定位 + 遮罩的 div 自己实现对话框。
+ */
+export function UpdateChannelDialog({ value, onClose, onSaved }) {
+  const tr = useText();
+  const [proxy, setProxy] = useState(value?.proxyUrl || "");
+  const [token, setToken] = useState("");
+  const [clearToken, setClearToken] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const proxyRef = useRef(null);
+  const hasToken = !!value?.hasGithubToken;
+  useEffect(() => {
+    try {
+      proxyRef.current?.focus?.();
+    } catch {
+      /* 宿主环境可能没有真实 DOM，聚焦失败不影响保存 */
+    }
+  }, []);
+  useEffect(() => {
+    if (typeof document === "undefined" || !document.addEventListener)
+      return undefined;
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      onClose();
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+  async function save() {
+    if (saving) return;
+    const next = { proxyUrl: proxy.trim() };
+    // 勾了清除就不要再把输入框里的内容发出去，避免两个动作互相覆盖。
+    if (clearToken) next.clearGithubToken = true;
+    else if (token.trim()) next.githubToken = token.trim();
+    setSaving(true);
+    setError("");
+    try {
+      const result = await apiJson("/dsh-purge/community", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ op: "preferences", value: next }),
+      });
+      assertMaintenanceResult(result);
+      onSaved(result.update_preferences);
+      onClose();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+  return h(
+    "div",
+    {
+      className: "dshpp-updch-mask",
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-label": tr("updch.title", "更新通道：代理与 GitHub 密钥"),
+      onClick: (e) => {
+        if (e.target === e.currentTarget && !saving) onClose();
+      },
+    },
+    h(
+      "div",
+      { className: "dshpp-updch-card" },
+      h(
+        "h4",
+        { className: "dshpp-updch-title" },
+        tr("updch.title", "更新通道：代理与 GitHub 密钥"),
+      ),
+      h(
+        "p",
+        { className: "dshpp-hint" },
+        tr(
+          "updch.scope",
+          "这里的代理与密钥只作用于本插件的更新检查与下载通道，不影响其它模型厂商的请求，也不写入宿主进程环境。留空即直连。",
+        ),
+      ),
+      h(
+        "label",
+        { className: "dshpp-updch-label" },
+        h("span", null, tr("updch.proxy", "代理地址")),
+        h("input", {
+          ref: proxyRef,
+          type: "text",
+          className: "dshpp-field dshpp-updch-field",
+          "aria-label": tr("updch.proxy", "代理地址"),
+          value: proxy,
+          disabled: saving,
+          placeholder: tr("updch.proxy.ph", "socks5://127.0.0.1:60808"),
+          spellCheck: false,
+          autoComplete: "off",
+          onChange: (e) => setProxy(e.target.value),
+        }),
+      ),
+      h(
+        "p",
+        { className: "dshpp-hint" },
+        tr(
+          "updch.proxy.hint",
+          "支持 http:// / https:// / socks5:// 前缀，例如 http://127.0.0.1:7890。留空表示直连。",
+        ),
+      ),
+      h(
+        "label",
+        { className: "dshpp-updch-label" },
+        h("span", null, tr("updch.token", "GitHub 密钥")),
+        h("input", {
+          type: "password",
+          className: "dshpp-field dshpp-updch-field",
+          "aria-label": tr("updch.token", "GitHub 密钥"),
+          value: token,
+          disabled: saving || clearToken,
+          placeholder: tr(
+            "updch.token.ph",
+            "可选：提高 GitHub API 额度，留空则不修改",
+          ),
+          spellCheck: false,
+          autoComplete: "off",
+          onChange: (e) => setToken(e.target.value),
+        }),
+      ),
+      h(
+        "p",
+        { className: "dshpp-hint" },
+        hasToken
+          ? tr(
+              "updch.token.set",
+              "本机已配置密钥。输入框始终为空，留空保存表示保持不变。",
+            )
+          : tr("updch.token.unset", "本机尚未配置密钥。留空表示不配置。"),
+      ),
+      hasToken
+        ? h(
+            "label",
+            { className: "dshpp-updch-check" },
+            h("input", {
+              type: "checkbox",
+              checked: clearToken,
+              disabled: saving,
+              "aria-label": tr("updch.token.clear", "清除已保存的密钥"),
+              onChange: (e) => setClearToken(!!e.target.checked),
+            }),
+            h("span", null, tr("updch.token.clear", "清除已保存的密钥")),
+          )
+        : null,
+      error ? h("p", { role: "alert" }, error) : null,
+      h(
+        "div",
+        { className: "dshpp-updch-ops" },
+        h(
+          Btn,
+          { disabled: saving, onClick: onClose },
+          tr("updch.cancel", "取消"),
+        ),
+        h(
+          Btn,
+          { kind: "primary", disabled: saving, onClick: save },
+          saving ? tr("updch.saving", "保存中…") : tr("updch.save", "保存"),
+        ),
+      ),
+    ),
+  );
+}
+
 export function CommunityMaintenance() {
   const [value, setValue] = useState(null),
     [notice, setNotice] = useState(""),
@@ -356,6 +556,8 @@ export function CommunityMaintenance() {
     [release, setRelease] = useState("");
   const [listState, setListState] = useState("loading"),
     [listError, setListError] = useState("");
+  const [channelOpen, setChannelOpen] = useState(false);
+  const tr = useText();
   const mounted = useRef(false),
     generation = useRef(0),
     running = useRef(false);
@@ -449,11 +651,28 @@ export function CommunityMaintenance() {
     "section",
     { className: "dshpp-panel", "aria-label": "社区版维护" },
     h("h3", null, "维护：更新与本机备份"),
+    // 通道现状摘要：代理是否直连、密钥是否已配置（密钥明文永不回显）。
+    // 入口按钮不在这里，它跟「自动检查更新」放在同一行。
+    value
+      ? h(
+          "p",
+          { className: "dshpp-hint" },
+          (value.update_preferences?.proxyUrl
+            ? tr("updch.state.proxy", "更新通道代理：") +
+              value.update_preferences.proxyUrl
+            : tr("updch.state.direct", "更新通道：直连，未使用代理")) +
+            " · " +
+            (value.update_preferences?.hasGithubToken
+              ? tr("updch.state.token.on", "GitHub 密钥已配置")
+              : tr("updch.state.token.off", "未配置 GitHub 密钥")),
+        )
+      : null,
     h(UpdatePreferences, {
       value: value?.update_preferences,
       status: value?.update_status,
       onSaved: (next) =>
         setValue((current) => ({ ...current, update_preferences: next })),
+      onOpenChannel: () => setChannelOpen(true),
     }),
     h(
       "div",
@@ -568,5 +787,18 @@ export function CommunityMaintenance() {
       "备份只保存在本机。回滚保留当前提示词、规则和其他插件设置；安装或回滚后需要重启 DSH 进程；仅刷新浏览器不会加载新版后端。",
     ),
     notice ? h("p", { role: "status" }, notice) : null,
+    // 对话框挂在面板内部，靠固定定位脱离容器，不依赖 portal。
+    channelOpen && value
+      ? h(UpdateChannelDialog, {
+          value: value.update_preferences,
+          onClose: () => setChannelOpen(false),
+          onSaved: (next) => {
+            setValue((current) => ({ ...current, update_preferences: next }));
+            setNotice(
+              tr("updch.saved", "更新通道已保存，下一次检查更新即生效。"),
+            );
+          },
+        })
+      : null,
   );
 }
