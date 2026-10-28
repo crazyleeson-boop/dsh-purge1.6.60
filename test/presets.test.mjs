@@ -71,6 +71,23 @@ test("the bundled preset parses into a registry definition", () => {
   assert(!ids.includes("redteam-tools"), "red team rows stripped");
 });
 
+test("installed unrestricted preset preserves native skill discovery", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "purge-skill-roots-"));
+  try {
+    const { dir } = installPreset({ home });
+    const def = readPresetDefinition("unrestricted", dir);
+    const provider = def.plugins.find((row) => row.id === "skill-filesystem");
+    assert(provider, "filesystem skill provider is registered");
+    assert.equal(provider.config.includeDefaultRoots, true,
+      "user-agents and project skills must remain discoverable after installation");
+    assert.equal(provider.config.customSkillDirs, undefined,
+      "the default DSH home root should not also be registered as a custom root");
+    assert(def.plugins.some((row) => row.id === "tool-skill"), "skill loader remains available");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("a plugin-managed preset is updated in place, a user-edited one is kept", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "purge-preset-managed-"));
   try {

@@ -93,12 +93,10 @@
 
 - id: skill-filesystem
   name: '@deepseek-ai/dsh-skill-filesystem'
-  # 技能根：只扫描 $DSH_HOME/skills（用户自己的那份），不吞项目级技能包。
-  # 无限制模式不挂红队技能，避免把演练相关的几百个条目塞进普通会话。
+  # 使用宿主默认技能根，与 standard 预设保持一致：用户级、项目级和 bundled。
+  # $DSH_HOME/skills 已在默认根中，无需再次注册为 customSkillDirs。
   config:
-    includeDefaultRoots: false
-    customSkillDirs:
-      - !!js dshHomePath('skills')
+    includeDefaultRoots: true
 
 - id: tool-skill
   name: '@deepseek-ai/dsh-tool-skill'
