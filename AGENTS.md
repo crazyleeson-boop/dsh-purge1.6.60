@@ -1,7 +1,7 @@
 # AGENTS.md — 给 AI agent 的 Purge 使用说明书
 
 > 这份文件是写给**在 DSH 里干活的 agent** 的，不是营销文档。
-> 当前版本：**1.6.60** · 适配 DSH Desktop **0.2.1-rc.3**（rc.1 / rc.2 同样通过）
+> 当前版本：**1.6.61** · 适配 DSH Desktop **0.2.1-rc.5**（rc.1 / rc.2 / rc.3 同样通过）
 > 版本号由 `npm run check:docs` 与 `package.json` 校验，发版必须同步。
 
 ---
@@ -133,8 +133,8 @@ purge-community probe new
 
 | 组件 | 值 |
 | --- | --- |
-| 插件 | `dsh-purge-community` 1.6.60 |
-| 已验证宿主 | DSH Desktop 0.2.1-rc.1 / 0.2.1-rc.2 / 0.2.1-rc.3 |
+| 插件 | `dsh-purge-community` 1.6.61 |
+| 已验证宿主 | DSH Desktop 0.2.1-rc.1 / 0.2.1-rc.2 / 0.2.1-rc.3 / 0.2.1-rc.5 |
 | 其它宿主 | 允许应用，但 `selfcheck` 会标"未验证"；先看 `diagnose` |
 | Node | ≥18（桌面版自带运行时即可） |
 
@@ -391,6 +391,12 @@ Windows Electron 的递归删除可能进入 Junction。清理使用 `removeTree
 - `fileOptional: ["key"]` 表示这个目标**在新版宿主里已不承载该行为**，不参与 `partial` 判定；它仍然逐文件出现在 `patchStatusDetail().files` 里，状态照实显示。
 - 加之前必须核对：目标文件是真没有这段逻辑，还是只是换了写法。说不清就不加。
 - 当前名单与依据：#32 `harness-dev-context`（`legacyParagraph` 匹配常量，改了会漏历史段落）、#36 `tool-fs`（措辞已由审批补丁写成 `Approval is auto-granted.`）、#62 `dsh-tools`（rc.3 把判断只留在 `types/index.js`）。#50 不是 optional，而是补了等价的"已达成"标记。
+
+## 1.6.61：已验证宿主推进到 rc.5
+
+`QUALIFIED_HOST_VERSIONS` 追加 `0.2.1-rc.5`。依据是宿主源码级回归，不是"这台机器跑通了"：把 `resources/app.asar` 原始备份里的 rc.5 `@deepseek-ai` 树（307 包 / 6190 文件）整棵取出，对 `ALL_PATCHES` 跑 `patchDrift` 得 `checked 82 / drifted 0`，例外三条都已核实——#76（用户 unrestricted 预设无官方身份句锚点）、#88（级联，前置 #87 未应用）、#83（目标 `resources/app/lib/main.js` 在 `@deepseek-ai` 之外，在线宿主 `missing_file: 0`）。
+
+证据落在 `test/fixtures/verified-hosts.json`，`test/qualified-hosts.test.mjs` 反向校验：有证据才能进清单、进清单必须零漂移。`rc.4` 不纳入（无该版本宿主源码证据）。补丁定义、提示词、预设、设置、代理一律不动；安装不自动 apply/restart。
 
 ## 1.6.60：缺目标异常与遗留维护锁（#86 / #87）
 
