@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "note": "每个条目都必须出现在 lib/community.js 的 QUALIFIED_HOST_VERSIONS 里，且 drifted 必须为 0。optional_drift / chained / target_file_missing 只记录已知且能解释的例外，不是豁免漂移的通道。",
+  "hosts": [
+    {
+      "version": "0.2.1-rc.5",
+      "checked": 82,
+      "drifted": 0,
+      "optional_drift": [76],
+      "chained": [88],
+      "target_file_missing": [83],
+      "explain": {
+        "76": "匹配用户自建 unrestricted 预设里的官方身份句；该文件是 prefix: | 正文，没有锚点，属无需处理",
+        "88": "级联补丁，前置 #87 未应用时锚点尚不存在",
+        "83": "目标 resources/app/lib/main.js 在 @deepseek-ai 子树之外；在线宿主 missing_file: 0"
+      },
+      "source": "resources/app.asar 原始备份中的 @deepseek-ai 树（307 包 / 6190 文件），patchDrift(ALL_PATCHES)",
+      "measured_at": "2026-10-30"
+    }
+  ]
+}

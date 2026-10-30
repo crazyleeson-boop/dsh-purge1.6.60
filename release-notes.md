@@ -1,3 +1,18 @@
+# 1.6.61
+
+把「已验证宿主」清单从 `0.2.1-rc.3` 推进到 **`0.2.1-rc.5`**：在 rc.5 的原始宿主源码上逐条核对 82 条补丁锚点，零漂移。
+
+- **rc.5 适配**：`QUALIFIED_HOST_VERSIONS` 增加 `0.2.1-rc.5`，自检不再把 rc.5 标成「未在已验证清单内」。找得到宿主就允许写入、写前备份、锚点漂移逐条上报这些行为不变。
+- **回归证据**：从 `resources/app.asar` 的原始备份里整棵取出 rc.5 的 `@deepseek-ai`（307 包 / 6190 文件），对 `ALL_PATCHES` 跑 `patchDrift`：`checked 82 / drifted 0`。`optionalDrift` 只有 #76（用户预设文件里没有官方身份句锚点，属无需处理）；`chained` 只有 #88（前置 #87 未应用）；`target_file_missing` 只有 #83（目标是 `resources/app/lib/main.js`，不在 `@deepseek-ai` 子树内，在线宿主实测 `missing_file: 0`）。
+- 证据清单落在 `test/fixtures/verified-hosts.json`，由 `test/qualified-hosts.test.mjs` 反向校验：有证据才能进清单，进了清单必须零漂移。
+- 现有补丁定义、用户提示词、预设、设置、更新偏好和代理不改动；安装不会自动重启 DSH。
+
+**rc.4 未纳入**：没有该版本宿主源码的证据，不做「跑通了就加」的判断。rc.1 / rc.2 / rc.3 继续有效。
+
+详细说明见 [1.6.61 发行说明](docs/releases/1.6.61.md)。
+
+---
+
 # 1.6.60
 
 修复缺失目标文件导致的异常中断，以及异常退出后遗留维护锁阻塞备份、安装和回滚的问题。感谢 Minervaowl7 提交 PR #88，以及 ShiTan-677 提供 macOS 复核证据。
